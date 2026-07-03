@@ -51,8 +51,9 @@ CREATE TABLE IF NOT EXISTS analysis_cache (
 
 @contextmanager
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 10000")
     try:
         yield conn
         conn.commit()
@@ -62,6 +63,10 @@ def get_conn():
 
 def init_db():
     with get_conn() as conn:
+        # WAL lets the background scheduler (resolving calls, scanning the
+        # watchlist) write concurrently with API request reads/writes instead
+        # of blocking each other — persists in the db file, only needs setting once.
+        conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript(SCHEMA)
 
 

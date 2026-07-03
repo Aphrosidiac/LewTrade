@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from anthropic import Anthropic
 from tradingview_mcp.core.services.news_service import fetch_news
@@ -27,6 +28,12 @@ log = logging.getLogger("lewtrade.engine")
 
 _client: Anthropic | None = None
 CACHE_TTL_S = 180  # repeated requests for the same symbol/timeframe within 3 min reuse the result
+
+# analyze() fans out 4 independent network calls (technical, news, multi-timeframe,
+# sentiment) concurrently instead of stacking them sequentially — multi-timeframe
+# alone is 5 sequential TradingView requests, so overlapping the rest with it is
+# most of the win. Shared executor avoids per-request thread-pool creation cost.
+_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="lewtrade-fetch")
 
 
 def _anthropic() -> Anthropic:
@@ -107,6 +114,15 @@ def _multi_timeframe(norm_symbol: str, exchange: str) -> dict | None:
         return None
 
 
+def _fetch_news(keyword: str, category: str) -> list[dict]:
+    news_items = fetch_news(symbol=keyword, category=category, limit=6)
+    if len(news_items) < 3:
+        seen_titles = {n["title"] for n in news_items}
+        general = fetch_news(symbol=None, category=category, limit=6)
+        news_items += [n for n in general if n["title"] not in seen_titles]
+    return news_items
+
+
 def _sentiment(keyword: str, category: str) -> dict | None:
     try:
         sentiment_category = "crypto" if category == "crypto" else "stocks"
@@ -128,19 +144,19 @@ def analyze(symbol: str, exchange_override: str | None = None, timeframe: str = 
         if cached:
             return {**cached, "cached": True}
 
-    technical = analyze_coin(norm_symbol, exchange, timeframe)
+    technical_f = _pool.submit(analyze_coin, norm_symbol, exchange, timeframe)
+    news_f = _pool.submit(_fetch_news, keyword, category)
+    mtf_f = _pool.submit(_multi_timeframe, norm_symbol, exchange)
+    sentiment_f = _pool.submit(_sentiment, keyword, category)
+
+    technical = technical_f.result()
     if "error" in technical:
         return {"error": technical["error"], "symbol": norm_symbol, "exchange": exchange}
 
-    news_items = fetch_news(symbol=keyword, category=category, limit=6)
-    if len(news_items) < 3:
-        seen_titles = {n["title"] for n in news_items}
-        general = fetch_news(symbol=None, category=category, limit=6)
-        news_items += [n for n in general if n["title"] not in seen_titles]
-
+    news_items = news_f.result()
+    mtf = mtf_f.result()
+    sentiment = sentiment_f.result()
     candle = _candle_score(technical)
-    mtf = _multi_timeframe(norm_symbol, exchange)
-    sentiment = _sentiment(keyword, category)
 
     verdict = _synthesize(norm_symbol, timeframe, technical, news_items, candle, mtf, sentiment)
 
