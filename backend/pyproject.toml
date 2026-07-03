@@ -1,0 +1,16 @@
+[project]
+name = "lewtrade"
+version = "0.1.0"
+description = "LewTrade — trend, support/resistance, and news-driven trading signal analysis"
+requires-python = ">=3.13"
+dependencies = [
+    "anthropic>=0.116.0",
+    "fastapi>=0.115",
+    "python-dotenv>=1.2.2",
+    "requests>=2.34.2",
+    "tradingview-mcp-server",
+    "uvicorn>=0.34",
+]
+
+[tool.uv.sources]
+tradingview-mcp-server = { path = "../../tradingview-mcp", editable = true }
