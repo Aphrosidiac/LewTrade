@@ -127,7 +127,9 @@ onMounted(loadWatchlist)
               <div class="text-sm font-mono text-neutral-400 w-20 text-right">{{ results[item.id].price.current_price }}</div>
             </template>
             <template v-else-if="results[item.id]?.error">
-              <span class="text-xs text-red-400">error</span>
+              <span class="text-xs text-red-400 max-w-64 truncate" :title="results[item.id].error">
+                {{ results[item.id].error }}
+              </span>
             </template>
 
             <button

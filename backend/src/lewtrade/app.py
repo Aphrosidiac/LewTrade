@@ -103,7 +103,11 @@ async def scan_watchlist():
         try:
             result = await asyncio.to_thread(analyze, item["symbol"], item["exchange"], item["timeframe"])
         except Exception as exc:
-            return {"symbol": item["symbol"], "exchange": item["exchange"], "timeframe": item["timeframe"], "error": str(exc)}
+            # watchlist_id matters on this path too — the frontend keys results
+            # by it, so omitting it made a failed scan vanish silently instead
+            # of marking the row as errored.
+            return {"watchlist_id": item["id"], "symbol": item["symbol"],
+                    "exchange": item["exchange"], "timeframe": item["timeframe"], "error": str(exc)}
         result["watchlist_id"] = item["id"]
         return result
 
