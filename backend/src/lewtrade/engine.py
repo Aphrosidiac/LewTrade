@@ -1,7 +1,8 @@
 """Core analysis: pulls technicals, multi-timeframe confluence, candle
 strength, news, and Reddit sentiment from the tradingview-mcp engine, then
-asks Claude to synthesize all of it into one verdict. Results are cached and
-every call is logged for track-record scoring.
+asks an LLM (DeepSeek V4 Flash via OpenRouter) to synthesize all of it into
+one verdict. Results are cached and every call is logged for track-record
+scoring.
 """
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from anthropic import Anthropic
+from openai import OpenAI
 from tradingview_mcp.core.services.news_service import fetch_news
 from tradingview_mcp.core.services.screener_service import (
     analyze_coin,
@@ -26,8 +27,11 @@ from lewtrade.symbols import resolve
 
 log = logging.getLogger("lewtrade.engine")
 
-_client: Anthropic | None = None
+_client: OpenAI | None = None
 CACHE_TTL_S = 180  # repeated requests for the same symbol/timeframe within 3 min reuse the result
+
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+MODEL = "deepseek/deepseek-v4-flash"
 
 # analyze() fans out 4 independent network calls (technical, news, multi-timeframe,
 # sentiment) concurrently instead of stacking them sequentially — multi-timeframe
@@ -36,27 +40,46 @@ CACHE_TTL_S = 180  # repeated requests for the same symbol/timeframe within 3 mi
 _pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="lewtrade-fetch")
 
 
-def _anthropic() -> Anthropic:
+def _llm() -> OpenAI:
     global _client
     if _client is None:
-        _client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        _client = OpenAI(
+            api_key=os.environ["OPENROUTER_API_KEY"],
+            base_url=OPENROUTER_BASE_URL,
+            # Optional OpenRouter attribution headers — they surface the app on
+            # OpenRouter's dashboards and cost nothing.
+            default_headers={
+                "HTTP-Referer": "https://lewtrade.lewix.ai",
+                "X-Title": "LewTrade",
+            },
+        )
     return _client
 
 
+CALLS = ["STRONG_SELL", "SELL", "NEUTRAL", "BUY", "STRONG_BUY"]
+CONFIDENCES = ["Low", "Medium", "High"]
+
+# OpenAI-format function schema (OpenRouter's wire format). Note the shape
+# differs from Anthropic's: nested under "function", and the schema key is
+# "parameters" rather than "input_schema".
 VERDICT_TOOL = {
-    "name": "emit_verdict",
-    "description": "Emit the synthesized trading call.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "call": {"type": "string", "enum": ["STRONG_SELL", "SELL", "NEUTRAL", "BUY", "STRONG_BUY"]},
-            "confidence": {"type": "string", "enum": ["Low", "Medium", "High"]},
-            "gauge": {"type": "integer", "minimum": 0, "maximum": 100, "description": "0=strong sell, 50=neutral, 100=strong buy"},
-            "trend_label": {"type": "string", "description": "Short human trend read, e.g. 'Uptrend, pulling back to support'"},
-            "bullets": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 4},
-            "what_flips_it": {"type": "string", "description": "The catalyst/level that would invalidate this call"},
+    "type": "function",
+    "function": {
+        "name": "emit_verdict",
+        "description": "Emit the synthesized trading call.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "call": {"type": "string", "enum": CALLS},
+                "confidence": {"type": "string", "enum": CONFIDENCES},
+                "gauge": {"type": "integer", "minimum": 0, "maximum": 100, "description": "0=strong sell, 50=neutral, 100=strong buy"},
+                "trend_label": {"type": "string", "description": "Short human trend read, e.g. 'Uptrend, pulling back to support'"},
+                "bullets": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 4},
+                "what_flips_it": {"type": "string", "description": "The catalyst/level that would invalidate this call"},
+            },
+            "required": ["call", "confidence", "gauge", "trend_label", "bullets", "what_flips_it"],
+            "additionalProperties": False,
         },
-        "required": ["call", "confidence", "gauge", "trend_label", "bullets", "what_flips_it"],
     },
 }
 
@@ -246,11 +269,11 @@ def _synthesize(symbol: str, timeframe: str, technical: dict, news_items: list[d
         "headlines": [{"title": n["title"], "summary": n["summary"]} for n in news_items[:6]],
     }
 
-    message = _anthropic().messages.create(
-        model="claude-haiku-4-5-20251001",
+    completion = _llm().chat.completions.create(
+        model=MODEL,
         max_tokens=1024,
         tools=[VERDICT_TOOL],
-        tool_choice={"type": "tool", "name": "emit_verdict"},
+        tool_choice={"type": "function", "function": {"name": "emit_verdict"}},
         messages=[{
             "role": "user",
             "content": (
@@ -269,15 +292,57 @@ def _synthesize(symbol: str, timeframe: str, technical: dict, news_items: list[d
         }],
     )
 
-    for block in message.content:
-        if block.type == "tool_use" and block.name == "emit_verdict":
-            return block.input
+    tool_calls = completion.choices[0].message.tool_calls or []
+    for call in tool_calls:
+        if call.function.name == "emit_verdict":
+            # Unlike Anthropic's already-parsed block.input, OpenAI-format
+            # arguments arrive as a JSON *string* that the model generated —
+            # so it can be malformed or off-schema and must be validated.
+            try:
+                return _validate_verdict(json.loads(call.function.arguments))
+            except (json.JSONDecodeError, ValueError) as exc:
+                log.warning("verdict rejected for %s: %s", symbol, exc)
+                break
 
-    return {
-        "call": "NEUTRAL",
-        "confidence": "Low",
-        "gauge": 50,
-        "trend_label": "Unable to synthesize",
-        "bullets": ["Model did not return a structured verdict."],
-        "what_flips_it": "N/A",
-    }
+    return _FALLBACK_VERDICT | {"trend_label": "Unable to synthesize"}
+
+
+_FALLBACK_VERDICT = {
+    "call": "NEUTRAL",
+    "confidence": "Low",
+    "gauge": 50,
+    "trend_label": "Unable to synthesize",
+    "bullets": ["Model did not return a usable structured verdict."],
+    "what_flips_it": "N/A",
+}
+
+
+def _validate_verdict(verdict: dict) -> dict:
+    """Enforce the schema ourselves rather than trusting the model to honour it.
+
+    Worth doing even though the schema declares enums: a `HOLD` (not a member
+    of the enum) reached the database under the previous provider, scored as
+    unrated, and rendered as raw text in the UI. Nothing downstream — outcome
+    scoring, the call-colour lookup — handles an unexpected value, so reject it
+    here instead.
+    """
+    if verdict.get("call") not in CALLS:
+        raise ValueError(f"call not in enum: {verdict.get('call')!r}")
+    if verdict.get("confidence") not in CONFIDENCES:
+        raise ValueError(f"confidence not in enum: {verdict.get('confidence')!r}")
+
+    try:
+        gauge = int(verdict["gauge"])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError(f"gauge not an integer: {verdict.get('gauge')!r}")
+    verdict["gauge"] = max(0, min(100, gauge))
+
+    for key in ("trend_label", "what_flips_it"):
+        if not isinstance(verdict.get(key), str) or not verdict[key].strip():
+            raise ValueError(f"{key} missing or empty")
+
+    bullets = verdict.get("bullets")
+    if not isinstance(bullets, list) or not all(isinstance(b, str) for b in bullets) or not bullets:
+        raise ValueError("bullets missing or not a list of strings")
+
+    return verdict

@@ -5,7 +5,7 @@ import asyncio
 from dotenv import load_dotenv
 load_dotenv()
 
-from anthropic import APIError
+from openai import APIError
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -37,14 +37,14 @@ def _run_analysis(symbol: str, exchange: str | None, timeframe: str):
     try:
         result = analyze(symbol, exchange, timeframe)
     except KeyError as exc:
-        if "ANTHROPIC_API_KEY" in str(exc):
-            raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not set in backend/.env")
+        if "OPENROUTER_API_KEY" in str(exc):
+            raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY is not set in backend/.env")
         raise
     except APIError as exc:
         # Not 502/504: Cloudflare (this site is proxied through it) replaces
         # those specific codes with its own generic error page regardless of
         # what the origin actually returned, discarding this detail message.
-        raise HTTPException(status_code=500, detail=f"Claude API error: {exc}")
+        raise HTTPException(status_code=500, detail=f"OpenRouter API error: {exc}")
     if "error" in result:
         raise HTTPException(status_code=422, detail=result["error"])
     return result

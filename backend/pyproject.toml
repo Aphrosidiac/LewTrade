@@ -4,7 +4,8 @@ version = "0.1.0"
 description = "LewTrade — trend, support/resistance, and news-driven trading signal analysis"
 requires-python = ">=3.13"
 dependencies = [
-    "anthropic>=0.116.0",
+    # OpenRouter speaks the OpenAI wire format, so the openai SDK is the client.
+    "openai>=1.60",
     "fastapi>=0.115",
     "python-dotenv>=1.2.2",
     "requests>=2.34.2",
