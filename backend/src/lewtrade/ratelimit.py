@@ -17,9 +17,23 @@ _hits: dict[str, deque[float]] = defaultdict(deque)
 _MAX_TRACKED_IPS = 5000
 
 
+def _client_ip(request: Request) -> str:
+    # The site is proxied through Cloudflare, which always sets this to the
+    # real visitor IP and strips any client-supplied copy at its edge — more
+    # reliable than X-Forwarded-For, which past Cloudflare resolves to one of
+    # its own edge node IPs rather than the actual visitor (confirmed live:
+    # request.client.host was landing on addresses in Cloudflare's own
+    # ranges). Falls back to request.client for local dev, where there's no
+    # Cloudflare hop and this header won't be present.
+    cf_ip = request.headers.get("cf-connecting-ip")
+    if cf_ip:
+        return cf_ip
+    return request.client.host if request.client else "unknown"
+
+
 def limit(max_requests: int, window_s: float):
     def dependency(request: Request) -> None:
-        ip = request.client.host if request.client else "unknown"
+        ip = _client_ip(request)
         if ip not in _hits and len(_hits) >= _MAX_TRACKED_IPS:
             _hits.clear()
 
