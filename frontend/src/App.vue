@@ -4,6 +4,8 @@ import TradingViewChart from './components/TradingViewChart.vue'
 import TrackRecordBadge from './components/TrackRecordBadge.vue'
 import WatchlistView from './components/WatchlistView.vue'
 import SymbolPicker from './components/SymbolPicker.vue'
+import CallHistory from './components/CallHistory.vue'
+import { apiFetch } from './api.js'
 
 const tab = ref('analyze') // 'analyze' | 'watchlist'
 
@@ -35,7 +37,7 @@ async function runAnalysis() {
   try {
     const params = new URLSearchParams({ symbol: symbol.value.trim().toUpperCase(), timeframe: timeframe.value })
     if (exchange.value.trim()) params.set('exchange', exchange.value.trim().toUpperCase())
-    const res = await fetch(`/api/analyze?${params}`)
+    const res = await apiFetch(`/api/analyze?${params}`)
     const data = await res.json()
     if (!res.ok) throw new Error(data.detail || 'Analysis failed')
     result.value = data
@@ -49,7 +51,7 @@ async function runAnalysis() {
 
 async function addToWatchlist() {
   if (!result.value) return
-  await fetch('/api/watchlist', {
+  await apiFetch('/api/watchlist', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ symbol: result.value.symbol, exchange: result.value.exchange, timeframe: result.value.timeframe }),
@@ -189,8 +191,30 @@ function selectFromWatchlist(item) {
                   <span class="text-neutral-600">•</span>{{ b }}
                 </li>
               </ul>
-              <div class="text-xs bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-neutral-400">
+              <div class="text-xs bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-neutral-400 mb-3">
                 <span class="text-neutral-500">What flips it:</span> {{ result.verdict.what_flips_it }}
+              </div>
+
+              <div v-if="result.trade_levels" class="grid grid-cols-4 gap-2 text-center">
+                <div class="bg-neutral-900 border border-neutral-800 rounded-lg py-2">
+                  <div class="text-[10px] uppercase tracking-wide text-neutral-500">Entry</div>
+                  <div class="text-sm font-mono">{{ result.trade_levels.entry }}</div>
+                </div>
+                <div class="bg-neutral-900 border border-neutral-800 rounded-lg py-2">
+                  <div class="text-[10px] uppercase tracking-wide text-neutral-500">Stop</div>
+                  <div class="text-sm font-mono text-red-400">{{ result.trade_levels.stop }}</div>
+                </div>
+                <div class="bg-neutral-900 border border-neutral-800 rounded-lg py-2">
+                  <div class="text-[10px] uppercase tracking-wide text-neutral-500">Target</div>
+                  <div class="text-sm font-mono text-emerald-400">{{ result.trade_levels.target }}</div>
+                </div>
+                <div class="bg-neutral-900 border border-neutral-800 rounded-lg py-2">
+                  <div class="text-[10px] uppercase tracking-wide text-neutral-500">R:R</div>
+                  <div class="text-sm font-mono">{{ result.trade_levels.risk_reward }}</div>
+                </div>
+              </div>
+              <div v-else-if="['BUY','STRONG_BUY','SELL','STRONG_SELL'].includes(result.verdict.call)" class="text-xs text-neutral-600">
+                No clean support/resistance levels to size a stop/target from.
               </div>
             </div>
 
@@ -212,6 +236,8 @@ function selectFromWatchlist(item) {
                 <div>{{ result.social_sentiment.sentiment_label }} ({{ result.social_sentiment.posts_analyzed }} posts)</div>
               </div>
             </div>
+
+            <CallHistory :symbol="result.symbol" :exchange="result.exchange" :timeframe="result.timeframe" />
 
             <div class="p-5" v-if="result.news?.length">
               <div class="text-xs uppercase tracking-wide text-neutral-500 mb-2">News considered</div>

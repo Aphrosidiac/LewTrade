@@ -93,6 +93,47 @@ def _candle_score(technical: dict) -> dict:
     return calculate_candle_pattern_score(synthetic_indicators, pattern_length=1, min_increase=1.0)
 
 
+def _trade_levels(call: str, price: float, support_resistance: dict) -> dict | None:
+    """Suggested stop/target derived from the pivot support/resistance levels
+    analyze_coin already computed — deterministic, not LLM-invented, so these
+    numbers stay grounded in real indicator data rather than a model guess.
+
+    nearest_resistance/nearest_support are only present when a pivot level
+    actually qualifies (resistance > close / support < close) — resistance_1
+    /support_1 aren't guaranteed that, since classic pivot levels are computed
+    from the prior period's high/low/close and can end up on the wrong side
+    of the current price. Falling back to them without re-checking position
+    could otherwise hand back an inverted setup (e.g. a "target" below entry
+    on a BUY call)."""
+    if call not in ("BUY", "STRONG_BUY", "SELL", "STRONG_SELL") or not price:
+        return None
+
+    resistance = support_resistance.get("nearest_resistance")
+    if resistance is None:
+        fallback = support_resistance.get("resistance_1")
+        resistance = fallback if fallback is not None and fallback > price else None
+
+    support = support_resistance.get("nearest_support")
+    if support is None:
+        fallback = support_resistance.get("support_1")
+        support = fallback if fallback is not None and fallback < price else None
+
+    if resistance is None or support is None:
+        return None
+
+    target, stop = (resistance, support) if call in ("BUY", "STRONG_BUY") else (support, resistance)
+    risk = abs(price - stop)
+    if risk <= 0:
+        return None
+
+    return {
+        "entry": price,
+        "stop": stop,
+        "target": target,
+        "risk_reward": round(abs(target - price) / risk, 2),
+    }
+
+
 def _multi_timeframe(norm_symbol: str, exchange: str) -> dict | None:
     try:
         full_symbol = normalize_tradingview_symbol(norm_symbol, exchange)
@@ -159,6 +200,7 @@ def analyze(symbol: str, exchange_override: str | None = None, timeframe: str = 
     candle = _candle_score(technical)
 
     verdict = _synthesize(norm_symbol, timeframe, technical, news_items, candle, mtf, sentiment)
+    trade_levels = _trade_levels(verdict["call"], technical["price_data"]["current_price"], technical["support_resistance"])
 
     result = {
         "symbol": norm_symbol,
@@ -174,6 +216,7 @@ def analyze(symbol: str, exchange_override: str | None = None, timeframe: str = 
         "social_sentiment": sentiment,
         "news": news_items,
         "verdict": verdict,
+        "trade_levels": trade_levels,
         "cached": False,
     }
 

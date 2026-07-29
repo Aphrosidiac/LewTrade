@@ -1,5 +1,6 @@
 <script setup>
 import { ref, watch } from 'vue'
+import { apiFetch } from '../api.js'
 
 const props = defineProps({
   modelValue: { type: String, default: '' },
@@ -22,7 +23,7 @@ function onInput(e) {
   }
   debounceHandle = setTimeout(async () => {
     try {
-      const res = await fetch(`/api/symbols/search?q=${encodeURIComponent(value.trim())}`)
+      const res = await apiFetch(`/api/symbols/search?q=${encodeURIComponent(value.trim())}`)
       suggestions.value = await res.json()
       open.value = suggestions.value.length > 0
     } catch {

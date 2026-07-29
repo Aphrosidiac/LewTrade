@@ -141,6 +141,34 @@ def resolve_due_calls(price_lookup) -> int:
         return resolved
 
 
+_OUTCOME_BUCKET = {"win": "wins", "loss": "losses", "flat": "flats"}
+
+
+def _breakdown(conn, group_expr: str) -> list[dict]:
+    """Win-rate grouped by an arbitrary column/expression, e.g. 'timeframe'
+    or 'confidence'. NEUTRAL calls (outcome NULL) are excluded, same as the
+    global win_rate — only directional calls count as scored."""
+    rows = conn.execute(
+        f"SELECT {group_expr} AS group_key, outcome FROM calls WHERE outcome IS NOT NULL"
+    ).fetchall()
+    buckets: dict[str, dict[str, int]] = {}
+    for r in rows:
+        bucket = buckets.setdefault(r["group_key"], {"wins": 0, "losses": 0, "flats": 0})
+        bucket[_OUTCOME_BUCKET[r["outcome"]]] += 1
+
+    breakdown = []
+    for key, bucket in buckets.items():
+        decided = bucket["wins"] + bucket["losses"]
+        breakdown.append({
+            "key": key,
+            **bucket,
+            "total": decided + bucket["flats"],
+            "win_rate": round((bucket["wins"] / decided) * 100, 1) if decided else None,
+        })
+    breakdown.sort(key=lambda b: b["total"], reverse=True)
+    return breakdown
+
+
 def track_record(limit: int = 50) -> dict:
     with get_conn() as conn:
         scored = conn.execute(
@@ -164,7 +192,22 @@ def track_record(limit: int = 50) -> dict:
             "flats": flats,
             "win_rate": win_rate,
             "recent": [dict(r) for r in recent],
+            "by_symbol": _breakdown(conn, "symbol || ' · ' || exchange"),
+            "by_timeframe": _breakdown(conn, "timeframe"),
+            "by_confidence": _breakdown(conn, "confidence"),
         }
+
+
+def symbol_history(symbol: str, exchange: str, timeframe: str, limit: int = 30) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, created_at, call, confidence, gauge, price_at_call, "
+            "resolved_at, price_at_resolve, outcome FROM calls "
+            "WHERE symbol = ? AND exchange = ? AND timeframe = ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (symbol, exchange, timeframe, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 # ── Watchlist ────────────────────────────────────────────────────────────────

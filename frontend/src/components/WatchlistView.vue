@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import SymbolPicker from './SymbolPicker.vue'
+import { apiFetch } from '../api.js'
 
 const emit = defineEmits(['select'])
 
@@ -19,7 +20,7 @@ const CALL_COLOR = {
 }
 
 async function loadWatchlist() {
-  const res = await fetch('/api/watchlist')
+  const res = await apiFetch('/api/watchlist')
   items.value = await res.json()
 }
 
@@ -27,7 +28,7 @@ async function addSymbol() {
   if (!newSymbol.value.trim()) return
   error.value = ''
   try {
-    const res = await fetch('/api/watchlist', {
+    const res = await apiFetch('/api/watchlist', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -45,7 +46,7 @@ async function addSymbol() {
 }
 
 async function removeItem(id) {
-  const res = await fetch(`/api/watchlist/${id}`, { method: 'DELETE' })
+  const res = await apiFetch(`/api/watchlist/${id}`, { method: 'DELETE' })
   items.value = await res.json()
   delete results.value[id]
 }
@@ -55,7 +56,7 @@ async function scanAll() {
   scanning.value = true
   error.value = ''
   try {
-    const res = await fetch('/api/watchlist/scan')
+    const res = await apiFetch('/api/watchlist/scan')
     const data = await res.json()
     const map = {}
     for (const r of data) {

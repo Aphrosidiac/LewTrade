@@ -5,12 +5,15 @@ import asyncio
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
+from anthropic import APIError
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from lewtrade import db, symbol_search
+from lewtrade.auth import require_api_key
 from lewtrade.engine import analyze
+from lewtrade.ratelimit import limit
 from lewtrade.scheduler import start_background_tasks
 
 app = FastAPI(title="LewTrade")
@@ -37,12 +40,14 @@ def _run_analysis(symbol: str, exchange: str | None, timeframe: str):
         if "ANTHROPIC_API_KEY" in str(exc):
             raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not set in backend/.env")
         raise
+    except APIError as exc:
+        raise HTTPException(status_code=502, detail=f"Claude API error: {exc}")
     if "error" in result:
         raise HTTPException(status_code=422, detail=result["error"])
     return result
 
 
-@app.get("/api/analyze")
+@app.get("/api/analyze", dependencies=[Depends(require_api_key), Depends(limit(20, 60))])
 def get_analysis(symbol: str, exchange: str | None = None, timeframe: str = "1h"):
     return _run_analysis(symbol, exchange, timeframe)
 
@@ -57,6 +62,11 @@ def get_track_record(limit: int = 50):
     return db.track_record(limit)
 
 
+@app.get("/api/history")
+def get_history(symbol: str, exchange: str, timeframe: str = "1h", limit: int = 30):
+    return db.symbol_history(symbol, exchange, timeframe, limit)
+
+
 class WatchlistIn(BaseModel):
     symbol: str
     exchange: str | None = None
@@ -68,7 +78,7 @@ def get_watchlist():
     return db.list_watchlist()
 
 
-@app.post("/api/watchlist")
+@app.post("/api/watchlist", dependencies=[Depends(require_api_key)])
 def post_watchlist(item: WatchlistIn):
     from lewtrade.symbols import resolve
     norm_symbol, exchange, _, _ = resolve(item.symbol, item.exchange)
@@ -76,13 +86,13 @@ def post_watchlist(item: WatchlistIn):
     return db.list_watchlist()
 
 
-@app.delete("/api/watchlist/{item_id}")
+@app.delete("/api/watchlist/{item_id}", dependencies=[Depends(require_api_key)])
 def delete_watchlist(item_id: int):
     db.remove_watchlist(item_id)
     return db.list_watchlist()
 
 
-@app.get("/api/watchlist/scan")
+@app.get("/api/watchlist/scan", dependencies=[Depends(require_api_key), Depends(limit(5, 60))])
 async def scan_watchlist():
     items = db.list_watchlist()
 
