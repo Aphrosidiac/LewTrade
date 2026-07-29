@@ -5,6 +5,7 @@ import TrackRecordBadge from './components/TrackRecordBadge.vue'
 import WatchlistView from './components/WatchlistView.vue'
 import SymbolPicker from './components/SymbolPicker.vue'
 import CallHistory from './components/CallHistory.vue'
+import PriceLevels from './components/PriceLevels.vue'
 import { apiFetch, apiFetchJson } from './api.js'
 
 const tab = ref('analyze') // 'analyze' | 'watchlist'
@@ -214,6 +215,12 @@ function selectFromWatchlist(item) {
                 No clean support/resistance levels to size a stop/target from.
               </div>
             </div>
+
+            <PriceLevels
+              :price="result.price.current_price"
+              :support-resistance="result.support_resistance"
+              :trade-levels="result.trade_levels"
+            />
 
             <div class="p-5 border-b border-neutral-800 grid grid-cols-2 gap-4 text-sm">
               <div>
