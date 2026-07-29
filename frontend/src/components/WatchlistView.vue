@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import SymbolPicker from './SymbolPicker.vue'
-import { apiFetch } from '../api.js'
+import { apiFetch, apiFetchJson } from '../api.js'
 
 const emit = defineEmits(['select'])
 
@@ -56,15 +56,14 @@ async function scanAll() {
   scanning.value = true
   error.value = ''
   try {
-    const res = await apiFetch('/api/watchlist/scan')
-    const data = await res.json()
+    const data = await apiFetchJson('/api/watchlist/scan')
     const map = {}
     for (const r of data) {
       if (r.watchlist_id) map[r.watchlist_id] = r
     }
     results.value = map
   } catch (e) {
-    error.value = 'Scan failed'
+    error.value = e.message || 'Scan failed'
   } finally {
     scanning.value = false
   }

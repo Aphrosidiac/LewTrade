@@ -5,7 +5,7 @@ import TrackRecordBadge from './components/TrackRecordBadge.vue'
 import WatchlistView from './components/WatchlistView.vue'
 import SymbolPicker from './components/SymbolPicker.vue'
 import CallHistory from './components/CallHistory.vue'
-import { apiFetch } from './api.js'
+import { apiFetch, apiFetchJson } from './api.js'
 
 const tab = ref('analyze') // 'analyze' | 'watchlist'
 
@@ -37,10 +37,7 @@ async function runAnalysis() {
   try {
     const params = new URLSearchParams({ symbol: symbol.value.trim().toUpperCase(), timeframe: timeframe.value })
     if (exchange.value.trim()) params.set('exchange', exchange.value.trim().toUpperCase())
-    const res = await apiFetch(`/api/analyze?${params}`)
-    const data = await res.json()
-    if (!res.ok) throw new Error(data.detail || 'Analysis failed')
-    result.value = data
+    result.value = await apiFetchJson(`/api/analyze?${params}`)
     trackRecordBadge.value?.reload()
   } catch (e) {
     error.value = e.message

@@ -41,7 +41,10 @@ def _run_analysis(symbol: str, exchange: str | None, timeframe: str):
             raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not set in backend/.env")
         raise
     except APIError as exc:
-        raise HTTPException(status_code=502, detail=f"Claude API error: {exc}")
+        # Not 502/504: Cloudflare (this site is proxied through it) replaces
+        # those specific codes with its own generic error page regardless of
+        # what the origin actually returned, discarding this detail message.
+        raise HTTPException(status_code=500, detail=f"Claude API error: {exc}")
     if "error" in result:
         raise HTTPException(status_code=422, detail=result["error"])
     return result
